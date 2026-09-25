@@ -1,0 +1,109 @@
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider  = "postgresql"
+    url       = env("DATABASE_URL")
+    directUrl = env("DIRECT_URL")
+}
+
+model Profile {
+    id             String   @id @db.Uuid
+    email          String   @unique
+    fullName       String?  @map("full_name")
+    role           String
+    registrationNo String?  @map("registration_no")
+    createdAt      DateTime @default(now()) @map("created_at")
+
+    @@map("profiles")
+}
+
+model Classroom {
+    id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+    teacherId String   @map("teacher_id") @db.Uuid
+    name      String
+    subject   String
+    joinCode  String   @unique @map("join_code")
+    createdAt DateTime @default(now()) @map("created_at")
+
+    @@map("classrooms")
+}
+
+model ClassMember {
+    id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+    classroomId String   @map("classroom_id") @db.Uuid
+    studentId   String   @map("student_id") @db.Uuid
+    createdAt   DateTime @default(now()) @map("created_at")
+
+    @@unique([classroomId, studentId])
+    @@map("class_members")
+}
+
+model Attendance {
+    id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+    classroomId    String   @map("classroom_id") @db.Uuid
+    studentId      String   @map("student_id") @db.Uuid
+    status         String
+    attendanceDate DateTime @map("attendance_date") @db.Date
+    createdAt      DateTime @default(now()) @map("created_at")
+
+    @@map("attendance")
+}
+
+model Quiz {
+    id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+    classroomId   String   @map("classroom_id") @db.Uuid
+    title         String
+    description   String?
+    questionCount Int      @default(0) @map("question_count")
+    createdAt     DateTime @default(now()) @map("created_at")
+
+    @@map("quizzes")
+}
+
+model QuizQuestion {
+    id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+    quizId        String  @map("quiz_id") @db.Uuid
+    questionText  String  @map("question_text")
+    topic         String?
+    optionA       String? @map("option_a")
+    optionB       String? @map("option_b")
+    optionC       String? @map("option_c")
+    optionD       String? @map("option_d")
+    correctOption String? @map("correct_option")
+    marks         Int     @default(1)
+
+    @@map("quiz_questions")
+}
+
+model QuizAttempt {
+    id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+    quizId     String   @map("quiz_id") @db.Uuid
+    studentId  String   @map("student_id") @db.Uuid
+    score      Float?
+    totalMarks Float?   @map("total_marks")
+    status     String?
+    createdAt  DateTime @default(now()) @map("created_at")
+
+    @@map("quiz_attempts")
+}
+
+model QuizAnswer {
+    id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+    attemptId  String  @map("attempt_id") @db.Uuid
+    questionId String  @map("question_id") @db.Uuid
+    answer     String?
+    isCorrect  Boolean @map("is_correct")
+
+    @@map("quiz_answers")
+}
+
+model QuizAllowedStudent {
+    id        String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+    quizId    String @map("quiz_id") @db.Uuid
+    studentId String @map("student_id") @db.Uuid
+
+    @@unique([quizId, studentId])
+    @@map("quiz_allowed_students")
+}
