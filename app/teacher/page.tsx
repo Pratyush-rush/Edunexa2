@@ -54,7 +54,23 @@ export default function TeacherDashboard() {
       return;
     }
 
-    // Load teacher classrooms
+    // 1. Try server API route first (uses service role, immune to client RLS issues)
+    try {
+      const res = await fetch(`/api/teacher/classrooms?teacherId=${user.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setClassrooms(data.classrooms || []);
+          setStudentCount(data.studentCount || 0);
+          setLoading(false);
+          return;
+        }
+      }
+    } catch (apiErr) {
+      console.warn("API classrooms load failed, trying direct client query:", apiErr);
+    }
+
+    // 2. Direct client query fallback
     const { data: classroomData, error: classroomError } =
       await supabase
         .from("classrooms")
@@ -71,7 +87,6 @@ export default function TeacherDashboard() {
     const loadedClassrooms = classroomData || [];
     setClassrooms(loadedClassrooms);
 
-    // If teacher has classrooms, count students
     if (loadedClassrooms.length > 0) {
       const classroomIds = loadedClassrooms.map(
         (classroom) => classroom.id
@@ -86,8 +101,6 @@ export default function TeacherDashboard() {
       if (memberError) {
         console.error("Student count error:", memberError);
       } else {
-        // Remove duplicate students if the same student
-        // somehow belongs to multiple classrooms.
         const uniqueStudents = new Set(
           (members || []).map((member) => member.student_id)
         );
@@ -134,32 +147,34 @@ export default function TeacherDashboard() {
       return;
     }
 
-    const joinCode = generateJoinCode();
+    // Call server API route (bypasses RLS recursion via service role key)
+    try {
+      const res = await fetch("/api/teacher/create-classroom", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          teacherId: user.id,
+          name: className.trim(),
+          subject: subject.trim(),
+        }),
+      });
 
-    const { data, error } = await supabase
-      .from("classrooms")
-      .insert({
-        teacher_id: user.id,
-        name: className.trim(),
-        subject: subject.trim(),
-        join_code: joinCode,
-      })
-      .select()
-      .single();
+      const resData = await res.json();
 
-    if (error) {
-      console.error(error);
-      alert(error.message);
+      if (!res.ok || resData.error) {
+        throw new Error(resData.error || "Failed to create classroom.");
+      }
+
+      setClassrooms((previous) => [resData.classroom, ...previous]);
+      setClassName("");
+      setSubject("");
+      setShowCreate(false);
+    } catch (err: any) {
+      console.error("Create classroom error:", err);
+      alert(err.message || "Failed to create classroom.");
+    } finally {
       setCreating(false);
-      return;
     }
-
-    setClassrooms((previous) => [data, ...previous]);
-
-    setClassName("");
-    setSubject("");
-    setShowCreate(false);
-    setCreating(false);
   }
 
   async function copyCode(code: string) {
