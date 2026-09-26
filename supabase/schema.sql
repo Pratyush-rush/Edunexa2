@@ -190,15 +190,41 @@ create policy "students_select_auth" on public.students
 create policy "students_all_own" on public.students
   for all using (auth.uid() = id);
 
--- classrooms: teacher manages own; students read classrooms they belong to
-create policy "classrooms_select_member" on public.classrooms
-  for select using (
-    auth.uid() = teacher_id
-    or exists (
-      select 1 from public.class_members cm
-      where cm.classroom_id = classrooms.id and cm.student_id = auth.uid()
-    )
+-- ============ HELPER FUNCTIONS ============
+-- SECURITY DEFINER functions bypass RLS during evaluation, completely preventing infinite recursion cycles.
+
+create or replace function public.is_classroom_teacher(_classroom_id uuid, _user_id uuid)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.classrooms
+    where id = _classroom_id and teacher_id = _user_id
   );
+$$;
+
+create or replace function public.is_classroom_member(_classroom_id uuid, _user_id uuid)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.class_members
+    where classroom_id = _classroom_id and student_id = _user_id
+  );
+$$;
+
+-- ============ TABLE POLICIES ============
+
+-- classrooms: readable by all authenticated users (teachers see theirs, students look up by join code or see enrolled)
+-- Only teacher can insert, update, or delete
+create policy "classrooms_select_auth" on public.classrooms
+  for select using (auth.role() = 'authenticated');
 create policy "classrooms_insert_teacher" on public.classrooms
   for insert with check (auth.uid() = teacher_id);
 create policy "classrooms_update_teacher" on public.classrooms
@@ -206,14 +232,11 @@ create policy "classrooms_update_teacher" on public.classrooms
 create policy "classrooms_delete_teacher" on public.classrooms
   for delete using (auth.uid() = teacher_id);
 
--- class_members: students see/join their memberships; teachers see classroom rosters
+-- class_members: students see their own memberships; teachers see classroom rosters
 create policy "class_members_select_auth" on public.class_members
   for select using (
     auth.uid() = student_id
-    or exists (
-      select 1 from public.classrooms c
-      where c.id = class_members.classroom_id and c.teacher_id = auth.uid()
-    )
+    or public.is_classroom_teacher(classroom_id, auth.uid())
   );
 create policy "class_members_insert_student" on public.class_members
   for insert with check (auth.uid() = student_id);
@@ -224,24 +247,15 @@ create policy "class_members_delete_student" on public.class_members
 create policy "attendance_select_auth" on public.attendance
   for select using (
     auth.uid() = student_id
-    or exists (
-      select 1 from public.classrooms c
-      where c.id = attendance.classroom_id and c.teacher_id = auth.uid()
-    )
+    or public.is_classroom_teacher(classroom_id, auth.uid())
   );
 create policy "attendance_insert_teacher" on public.attendance
   for insert with check (
-    exists (
-      select 1 from public.classrooms c
-      where c.id = attendance.classroom_id and c.teacher_id = auth.uid()
-    )
+    public.is_classroom_teacher(classroom_id, auth.uid())
   );
 create policy "attendance_delete_teacher" on public.attendance
   for delete using (
-    exists (
-      select 1 from public.classrooms c
-      where c.id = attendance.classroom_id and c.teacher_id = auth.uid()
-    )
+    public.is_classroom_teacher(classroom_id, auth.uid())
   );
 
 -- quizzes: teachers manage own; students read published in their classroom
@@ -250,11 +264,7 @@ create policy "quizzes_select_auth" on public.quizzes
     auth.uid() = teacher_id
     or (
       is_published = true
-      and exists (
-        select 1 from public.class_members cm
-        join public.classrooms c on c.id = cm.classroom_id
-        where c.id = quizzes.classroom_id and cm.student_id = auth.uid()
-      )
+      and public.is_classroom_member(classroom_id, auth.uid())
     )
   );
 create policy "quizzes_insert_teacher" on public.quizzes
@@ -274,11 +284,7 @@ create policy "quiz_questions_select_auth" on public.quiz_questions
         q.teacher_id = auth.uid()
         or (
           q.is_published = true
-          and exists (
-            select 1 from public.class_members cm
-            join public.classrooms c on c.id = cm.classroom_id
-            where c.id = q.classroom_id and cm.student_id = auth.uid()
-          )
+          and public.is_classroom_member(q.classroom_id, auth.uid())
         )
       )
     )
@@ -297,8 +303,7 @@ create policy "quiz_attempts_select_auth" on public.quiz_attempts
     auth.uid() = student_id
     or exists (
       select 1 from public.quizzes q
-      join public.classrooms c on c.id = q.classroom_id
-      where q.id = quiz_attempts.quiz_id and c.teacher_id = auth.uid()
+      where q.id = quiz_attempts.quiz_id and q.teacher_id = auth.uid()
     )
   );
 create policy "quiz_attempts_all_student" on public.quiz_attempts
@@ -315,8 +320,7 @@ create policy "quiz_answers_select_auth" on public.quiz_answers
         a.student_id = auth.uid()
         or exists (
           select 1 from public.quizzes q
-          join public.classrooms c on c.id = q.classroom_id
-          where q.id = a.quiz_id and c.teacher_id = auth.uid()
+          where q.id = a.quiz_id and q.teacher_id = auth.uid()
         )
       )
     )
@@ -335,40 +339,26 @@ create policy "quiz_allowed_select_auth" on public.quiz_allowed_students
     auth.uid() = student_id
     or exists (
       select 1 from public.quizzes q
-      join public.classrooms c on c.id = q.classroom_id
-      where q.id = quiz_allowed_students.quiz_id and c.teacher_id = auth.uid()
+      where q.id = quiz_allowed_students.quiz_id and q.teacher_id = auth.uid()
     )
   );
 create policy "quiz_allowed_all_teacher" on public.quiz_allowed_students
   for all using (
     exists (
       select 1 from public.quizzes q
-      join public.classrooms c on c.id = q.classroom_id
-      where q.id = quiz_allowed_students.quiz_id and c.teacher_id = auth.uid()
+      where q.id = quiz_allowed_students.quiz_id and q.teacher_id = auth.uid()
     )
   );
 
 -- classroom_materials: teachers manage own classroom materials; students read enrolled classrooms
 create policy "materials_select_auth" on public.classroom_materials
   for select using (
-    exists (
-      select 1 from public.classrooms c
-      where c.id = classroom_materials.classroom_id
-      and (
-        c.teacher_id = auth.uid()
-        or exists (
-          select 1 from public.class_members cm
-          where cm.classroom_id = c.id and cm.student_id = auth.uid()
-        )
-      )
-    )
+    teacher_id = auth.uid()
+    or public.is_classroom_member(classroom_id, auth.uid())
   );
 create policy "materials_all_teacher" on public.classroom_materials
   for all using (
-    exists (
-      select 1 from public.classrooms c
-      where c.id = classroom_materials.classroom_id and c.teacher_id = auth.uid()
-    )
+    teacher_id = auth.uid()
   );
 
 -- ============ STORAGE ============
